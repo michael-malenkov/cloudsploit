@@ -7,8 +7,8 @@ module.exports = {
     description: 'Checks whether EBS Backup is enabled',
     more_info: 'EBS volumes should have backups in the form of snapshots.',
     recommended_action: 'Ensure that each EBS volumes contain at least .',
-    link: 'https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-modifying-snapshot-permissions.html',
-    apis: ['EC2:describeInstances', 'EC2:describeVolumes', 'EC2:describeSnapshots', 'EC2:describeSnapshotAttribute', 'STS:getCallerIdentity'],
+    link: 'https://docs.aws.amazon.com/prescriptive-guidance/latest/backup-recovery/new-ebs-volume-backups.html',
+    apis: ['EC2:describeVolumes', 'EC2:describeSnapshots', 'STS:getCallerIdentity'],
 
     run: function(cache, settings, callback) {
         let results = [];
@@ -26,7 +26,6 @@ module.exports = {
                 ['ec2', 'describeSnapshots', region]);
 
             if (!describeVolumes) return rcb();
-            if (!describeSnapshots) return rcb();
 
             if (describeVolumes.err || !describeVolumes.data) {
                 helpers.addResult(results, 3,
@@ -39,7 +38,7 @@ module.exports = {
                 return rcb();
             }
 
-            if (describeSnapshots.err || !describeSnapshots.data) {
+            if (!describeSnapshots || describeSnapshots.err || !describeSnapshots.data) {
                 helpers.addResult(results, 3,
                     `Unable to query for EBS Snapshots: ${helpers.addError(describeSnapshots)}`, region);
                 return rcb();
@@ -49,7 +48,7 @@ module.exports = {
 
 
             describeSnapshots.data.forEach(function(snapshot){
-                if(snapshot.VolumeId){
+                if (snapshot.VolumeId) {
                     volumeSet.add(snapshot.VolumeId);
                 }
             });
@@ -57,11 +56,11 @@ module.exports = {
             describeVolumes.data.forEach(function(volume) {
                 let volumeArn = 'arn:' + awsOrGov + ':ec2:' + region + ':' + accountId + ':volume/' + volume.VolumeId;
                 if (volume.VolumeId) {
-                    if(volumeSet.has(volume.VolumeId)){
+                    if (volumeSet.has(volume.VolumeId)) {
                         helpers.addResult(results, 0,
                             'EBS Volume is backed up',
                             region, volumeArn);
-                    }else{
+                    } else {
                         helpers.addResult(results, 2,
                             'EBS Volume is not backed up',
                             region, volumeArn);
