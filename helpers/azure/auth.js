@@ -92,7 +92,7 @@ module.exports = {
             headers: headers,
             body: params.body ? JSON.stringify(params.body) : null
         }, function(error, response, body) {
-            if (response && response.statusCode === 200 && body) {
+            if (response && [200, 202].includes(response.statusCode) && body) {
                 try {
                     body = JSON.parse(body);
                 } catch (e) {
@@ -160,7 +160,7 @@ module.exports = {
                         if (dv.location &&
                             dv.location.toLowerCase().replace(/ /g, '') == location.toLowerCase()) {
                             return true;
-                        } else if (location.toLowerCase() == 'global' && !dv.location) {
+                        } else if (location.toLowerCase() == 'global' && (!dv.location || obj.ignoreLocation)) {
                             return true;
                         }
                         return false;

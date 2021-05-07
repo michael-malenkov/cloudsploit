@@ -56,6 +56,11 @@ var calls = {
             url: 'https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Network/networkSecurityGroups?api-version=2020-03-01'
         }
     },
+    networkInterfaces: {
+        listAll: {
+            url: 'https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Network/networkInterfaces?api-version=2020-11-01'
+        }
+    },
     vaults: {
         list: {
             url: 'https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.KeyVault/vaults?api-version=2019-09-01'
@@ -109,6 +114,7 @@ var calls = {
     securityContacts: {
         list: {
             url: 'https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Security/securityContacts?api-version=2017-08-01-preview',
+            ignoreLocation: true
         }
     },
     subscriptions: {
@@ -177,10 +183,22 @@ var calls = {
         listPostgres: {
             url: 'https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.DBforPostgreSQL/servers?api-version=2017-12-01'
         }
+    },
+    databaseAccounts: {
+        list: {
+            url: 'https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.DocumentDB/databaseAccounts?api-version=2020-06-01-preview'
+        }
     }
 };
 
 var postcalls = {
+    advancedThreatProtection: {
+        get: {
+            reliesOnPath: 'databaseAccounts.list',
+            properties: ['id'],
+            url: 'https://management.azure.com/{id}/providers/Microsoft.Security/advancedThreatProtectionSettings/current?api-version=2017-08-01-preview'
+        }
+    },
     serverBlobAuditingPolicies: {
         get: {
             reliesOnPath: 'servers.listSql',
@@ -195,6 +213,20 @@ var postcalls = {
             url: 'https://management.azure.com/{id}/securityAlertPolicies?api-version=2017-03-01-preview'
         }
     },
+    serverAutomaticTuning: {
+        get: {
+            reliesOnPath: 'servers.listSql',
+            properties: ['id'],
+            url: 'https://management.azure.com/{id}/automaticTuning/current?api-version=2020-08-01-preview'
+        }
+    },
+    flowLogs: {
+        list: {
+            reliesOnPath: 'networkWatchers.listAll',
+            properties: ['id'],
+            url: 'https://management.azure.com/{id}/flowLogs?api-version=2020-11-01'
+        }
+    },
     configurations: {
         listByServer: {
             reliesOnPath: 'servers.listPostgres',
@@ -202,11 +234,25 @@ var postcalls = {
             url: 'https://management.azure.com/{id}/configurations?api-version=2017-12-01'
         }
     },
+    serverAdministrators: {
+        list: {
+            reliesOnPath: 'servers.listPostgres',
+            properties: ['id'],
+            url: 'https://management.azure.com/{id}/administrators?api-version=2017-12-01'
+        }
+    },
     virtualMachineExtensions: {
         list: {
             reliesOnPath: 'virtualMachines.listAll',
             properties: ['id'],
             url: 'https://management.azure.com/{id}/extensions?api-version=2019-12-01'
+        }
+    },
+    virtualMachineScaleSetVMs: {
+        list: {
+            reliesOnPath: 'virtualMachineScaleSets.listAll',
+            properties: ['id'],
+            url: 'https://management.azure.com/{id}/virtualMachines?api-version=2020-12-01'
         }
     },
     blobContainers: {
@@ -221,6 +267,11 @@ var postcalls = {
             reliesOnPath: 'storageAccounts.list',
             properties: ['id'],
             url: 'https://management.azure.com/{id}/blobServices?api-version=2019-06-01'
+        },
+        getServiceProperties: {
+            reliesOnPath: 'storageAccounts.list',
+            properties: ['id'],
+            url: 'https://management.azure.com/{id}/blobServices/default?api-version=2019-06-01'
         }
     },
     fileShares: {
@@ -345,6 +396,13 @@ var tertiarycalls = {
             properties: ['id'],
             url: 'https://management.azure.com/{id}/providers/microsoft.insights/diagnosticSettings?api-version=2017-05-01-preview'
         }
+    },
+    backupShortTermRetentionPolicies: {
+        listByDatabase: {
+            reliesOnPath: 'databases.listByServer',
+            properties: ['id'],
+            url: 'https://management.azure.com/{id}/backupShortTermRetentionPolicies?api-version=2017-10-01-preview'
+        }
     }
 };
 
@@ -444,10 +502,10 @@ var collect = function(AzureConfig, settings, callback) {
                     var regionsToLoop = parseCollection(subCallObj.reliesOnPath, collection);
                     if (regionsToLoop && Object.keys(regionsToLoop).length) {
                         // Loop through regions
-                        async.eachOf(regionsToLoop, function(regionObj, region, regionCb) {
+                        async.eachOfLimit(regionsToLoop, 5, function(regionObj, region, regionCb) {
                             if (regionObj && regionObj.data && regionObj.data.length) {
                                 if (!collectionObj[region]) collectionObj[region] = {};
-                                async.each(regionObj.data, function(regionData, regionDataCb) {
+                                async.eachLimit(regionObj.data, 10, function(regionData, regionDataCb) {
                                     var localReq = {
                                         url: subCallObj.url,
                                         post: subCallObj.post,
@@ -523,7 +581,7 @@ var collect = function(AzureConfig, settings, callback) {
                         async.eachOf(regionsToLoop, function(regionObj, region, regionCb) {
                             if (!collectionObj[region]) collectionObj[region] = {};
                             // Loop through the resources
-                            async.eachOf(regionObj, function(resourceObj, resourceId, resourceCb){
+                            async.eachOfLimit(regionObj, 5, function(resourceObj, resourceId, resourceCb){
                                 function processResource(resourceData, resourceDataCb) {
                                     var localReq = {
                                         url: subCallObj.url,
@@ -561,14 +619,14 @@ var collect = function(AzureConfig, settings, callback) {
                                 }
                                 
                                 if (Array.isArray(resourceObj)) {
-                                    async.each(resourceObj, function(resourceData, resourceDataCb) {
+                                    async.eachLimit(resourceObj, 10, function(resourceData, resourceDataCb) {
                                         processResource(resourceData, resourceDataCb);
                                     }, function(){
                                         resourceCb();
                                     });
                                 } else {
                                     if (resourceObj && resourceObj.data && resourceObj.data.length) {
-                                        async.each(resourceObj.data, function(resourceData, resourceDataCb) {
+                                        async.eachLimit(resourceObj.data, 10, function(resourceData, resourceDataCb) {
                                             processResource(resourceData, resourceDataCb);
                                         }, function() {
                                             resourceCb();
