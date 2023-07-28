@@ -6,6 +6,7 @@ var managedAdminPolicy = 'arn:aws:iam::aws:policy/AdministratorAccess';
 module.exports = {
     title: 'Environment Admin Privileges',
     category: 'MWAA',
+    domain: 'Compute',
     description: 'Ensures no Amazon MWAA environment available in your AWS account has admin privileges.',
     more_info: 'Amazon MWAA environments should have most-restrictive IAM permissions for security best practices.',
     link: 'https://docs.aws.amazon.com/mwaa/latest/userguide/manage-access.html',
@@ -132,8 +133,7 @@ module.exports = {
                         getRolePolicy[policyName] && 
                         getRolePolicy[policyName].data &&
                         getRolePolicy[policyName].data.PolicyDocument) {
-                        let statements = helpers.normalizePolicyDocument(
-                            getRolePolicy[policyName].data.PolicyDocument);
+                        let statements = getRolePolicy[policyName].data.PolicyDocument;
                         if (!statements) break;
 
                         // Loop through statements to see if admin privileges

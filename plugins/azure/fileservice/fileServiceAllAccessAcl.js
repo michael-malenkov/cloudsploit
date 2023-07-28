@@ -5,11 +5,12 @@ var helpers = require('../../../helpers/azure');
 module.exports = {
     title: 'File Service All Access ACL',
     category: 'File Service',
+    domain: 'Storage',
     description: 'Ensures file shares do not allow full write, delete, or read ACL permissions',
     more_info: 'File shares can be configured to allow to read, write, or delete permissions from a share. This option should not be configured unless there is a strong business requirement.',
     recommended_action: 'Disable global read, write, and delete policies on all file shares and ensure the share ACL is configured with least privileges.',
     link: 'https://docs.microsoft.com/en-us/azure/storage/files/storage-how-to-create-file-share#create-a-file-share-through-the-azure-portal',
-    apis: ['storageAccounts:list', 'storageAccounts:listKeys', 'fileService:listSharesSegmented', 'fileService:getShareAcl'],
+    apis: ['storageAccounts:list', 'storageAccounts:listKeys', 'fileService:listSharesSegmentedNew', 'fileService:getShareAcl'],
     compliance: {
         hipaa: 'HIPAA access controls require data to be secured with least-privileged ' +
                 'ACLs. File Service ACLs enable granular permissions for data access.',
@@ -63,7 +64,6 @@ module.exports = {
                             // Add share ACL
                             var getShareAcl = helpers.addSource(cache, source,
                                 ['fileService', 'getShareAcl', location, fileShare.id]);
-
                             if (!getShareAcl || getShareAcl.err || !getShareAcl.data) {
                                 helpers.addResult(results, 3,
                                     'Unable to query File Service share ACL: ' + helpers.addError(getShareAcl), location, fileShare.id);
@@ -73,7 +73,7 @@ module.exports = {
 
                                 if (acl.signedIdentifiers && Object.keys(acl.signedIdentifiers).length) {
                                     for (var ident in acl.signedIdentifiers) {
-                                        var permissions = acl.signedIdentifiers[ident].Permissions;
+                                        var permissions = acl.signedIdentifiers[ident].accessPolicy.permissions;
                                         for (var i = 0; i <= permissions.length; i++) {
                                             switch (permissions.charAt(i)) {
                                             // case "r":

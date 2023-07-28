@@ -4,6 +4,7 @@ var helpers = require('../../../helpers/google');
 module.exports = {
     title: 'Open All Ports',
     category: 'VPC Network',
+    domain: 'Network Access Control',
     description: 'Determines if all ports are open to the public',
     more_info: 'While some ports such as HTTP and HTTPS are required to be open to the public to function properly, services should be restricted to known IP addresses.',
     link: 'https://cloud.google.com/vpc/docs/using-firewalls',
@@ -31,7 +32,7 @@ module.exports = {
             if (!firewalls) return rcb();
 
             if (firewalls.err || !firewalls.data) {
-                helpers.addResult(results, 3, 'Unable to query firewall rules: ' + helpers.addError(firewalls), region);
+                helpers.addResult(results, 3, 'Unable to query firewall rules', region, null, null, firewalls.err);
                 return rcb();
             }
 
@@ -40,7 +41,7 @@ module.exports = {
                 return rcb();
             }
 
-            helpers.findOpenAllPorts(firewalls.data, region, results);
+            helpers.findOpenAllPorts(firewalls.data, region, results, cache, source);
 
             rcb();
         }, function(){
@@ -48,4 +49,4 @@ module.exports = {
             callback(null, results, source);
         });
     }
-}
+};

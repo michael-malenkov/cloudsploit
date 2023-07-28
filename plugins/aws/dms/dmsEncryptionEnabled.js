@@ -4,6 +4,7 @@ var helpers = require('../../../helpers/aws');
 module.exports = {
     title: 'DMS Encryption Enabled',
     category: 'DMS',
+    domain: 'Application Integration',
     description: 'Ensures DMS encryption is enabled using a CMK',
     more_info: 'Data sent through the data migration service is encrypted using KMS. Encryption is enabled by default, but it is recommended to use customer managed keys.',
     recommended_action: 'Enable encryption using KMS CMKs for all DMS replication instances.',
@@ -24,7 +25,7 @@ module.exports = {
         dms_encryption_kms_alias: {
             name: 'DMS Encryption KMS Alias',
             description: 'If set, DMS encryption must be configured using the KMS key alias specified. Be sure to include the alias/ prefix. Comma-delimited.',
-            regex: '^alias/[a-zA-Z0-9_/-,]{0,256}$',
+            regex: '^alias/[a-zA-Z0-9_\\/,\\-]{0,256}$',
             default: false
         }
     },

@@ -4,11 +4,12 @@ var helpers = require('../../../helpers/google');
 module.exports = {
     title: 'SQL Configuration Logging',
     category: 'Logging',
+    domain: 'Management and Governance',
     description: 'Ensures that logging and log alerts exist for SQL configuration changes',
     more_info: 'Project Ownership is the highest level of privilege on a project, any changes in SQL configurations should be heavily monitored to prevent unauthorized changes.',
     link: 'https://cloud.google.com/logging/docs/logs-based-metrics/',
-    recommended_action: 'Ensure that log alerts exist for SQL configuration changes.',
-    apis: ['metrics:list', 'alertPolicies:list'],
+    recommended_action: 'Ensure that log metric and alert exist for SQL configuration changes.',
+    apis: ['metrics:list', 'alertPolicies:list', 'sql:list'],
     compliance: {
         hipaa: 'HIPAA requires the logging of all activity ' +
             'including access and all actions taken.'
@@ -20,6 +21,20 @@ module.exports = {
         var regions = helpers.regions();
 
         async.each(regions.alertPolicies, function(region, rcb){
+            let sqlInstances = helpers.addSource(
+                cache, source, ['sql', 'list', region]);
+
+            if (!sqlInstances) return rcb();
+
+            if (sqlInstances.err || !sqlInstances.data) {
+                helpers.addResult(results, 3, 'Unable to query SQL instances: ' + helpers.addError(sqlInstances), region, null, null, sqlInstances.err);
+                return rcb();
+            }
+
+            if (!sqlInstances.data.length) {
+                helpers.addResult(results, 0, 'No SQL instances found', region);
+                return rcb();
+            }
             var metrics = helpers.addSource(cache, source,
                 ['metrics', 'list', region]);
 
@@ -30,13 +45,13 @@ module.exports = {
 
             if ((metrics.err && metrics.err.length > 0) || !metrics.data) {
                 helpers.addResult(results, 3,
-                    'Unable to query for log metrics: ' + helpers.addError(metrics), region);
+                    'Unable to query for log metrics: ' + helpers.addError(metrics), region, null, null, metrics.err);
                 return rcb();
             }
 
             if ((alertPolicies.err && alertPolicies.err.length > 0) || !alertPolicies.data ) {
                 helpers.addResult(results, 3,
-                    'Unable to query for log alert policies: ' + helpers.addError(alertPolicies), region);
+                    'Unable to query for log alert policies: ' + helpers.addError(alertPolicies), region, null, null, alertPolicies.err);
                 return rcb();
             }
 
@@ -52,25 +67,28 @@ module.exports = {
 
             var metricExists = false;
             var metricName = '';
-            var missingMetricStr;
 
             var testMetrics = 'protoPayload.methodName="cloudsql.instances.update"';
 
-
-            metrics.data.forEach(metric => {
+            let disabled = false;
+            for (let metric of metrics.data) {
                 if (metric.filter) {
-                    if (metricExists) return;
+                    if (metricExists) break;
 
-                    if (metric.filter.trim() === testMetrics) {
-                        metricExists = true;
-                        metricName = metric.metricDescriptor.type;
-                    } else {
-                        return
+                    if (metric.filter.trim().indexOf(testMetrics) > -1) {
+                        if (metric.disabled) disabled = true;
+                        else {
+                            disabled = false;
+                            metricExists = true;
+                            metricName = metric.metricDescriptor.type;
+                        }
                     }
                 }
-            });
+            }
 
-            if (metricExists && metricName.length) {
+            if (disabled) {
+                helpers.addResult(results, 2, 'Log metric for SQL configuration changes is disbled', region);
+            } else if (metricExists && metricName.length) {
                 var conditionFound = false;
 
                 alertPolicies.data.forEach(alertPolicy => {
@@ -87,7 +105,7 @@ module.exports = {
                                     helpers.addResult(results, 0, 'Log alert for SQL configuration changes is enabled', region, alertPolicy.name);
                                 }
                             }
-                        })
+                        });
                     }
                 });
 
