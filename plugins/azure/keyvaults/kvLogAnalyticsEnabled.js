@@ -5,16 +5,18 @@ module.exports = {
     title: 'Key Vault Log Analytics Enabled',
     category: 'Key Vaults',
     domain: 'Application Integration',
+    severity: 'Medium',
     description: 'Ensures Key Vault Log Analytics logs are being properly delivered to Azure Monitor',
     more_info: 'Enabling Send to Log Analytics ensures that all Key Vault logs are being properly monitored and managed.',
     recommended_action: 'Send all diagnostic logs for Key Vault from the Azure Monitor service to Log Analytics.',
-    link: 'https://docs.microsoft.com/en-us/azure/azure-monitor/platform/collect-activity-logs',
+    link: 'https://learn.microsoft.com/en-us/azure/azure-monitor/platform/collect-activity-logs',
     apis: ['vaults:list', 'diagnosticSettings:listByKeyVault'],
     compliance: {
         hipaa: 'HIPAA requires that a secure audit record for ' +
                 'write read and delete is created for all ' +
                 'activities in the system.'
     },
+    realtime_triggers: ['microsoftkeyvault:vaults:write', 'microsoftkeyvault:vaults:delete','microsoftinsights:diagnosticsettings:write', 'microsoftinsights:diagnosticsettings:delete'],
 
     run: function(cache, settings, callback) {
         const results = [];

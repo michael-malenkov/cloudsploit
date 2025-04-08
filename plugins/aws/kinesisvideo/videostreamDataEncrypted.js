@@ -5,20 +5,22 @@ module.exports = {
     title: 'Video Stream Data Encrypted',
     category: 'Kinesis Video Streams',
     domain: 'Content Delivery',
+    severity: 'High',
     description: 'Ensure that Amazon Kinesis Video Streams is using desired encryption level for Data at-rest.',
     more_info: 'Server-side encryption is always enabled on Kinesis video streams data. If a user-provided key is not specified when the stream is created, the default key (provided by Kinesis Video Streams) is used. ' +
                'It is recommended to use customer-managed keys (CMKs) for encryption in order to gain more granular control over encryption/decryption process.',
     recommended_action: 'Encrypt Kinesis Video Streams data with customer-manager keys (CMKs).',
     link: 'https://docs.aws.amazon.com/kinesisvideostreams/latest/dg/how-kms.html',
-    apis: ['KinesisVideo:listStreams', 'KMS:describeKey', 'KMS:listKeys'],
+    apis: ['KinesisVideo:listStreams', 'KMS:describeKey', 'KMS:listKeys', 'KMS:listAliases'],
     settings: {
         video_stream_data_desired_encryption_level: {
             name: 'Kinesis Video Streams Data Target Encryption Level',
             description: 'In order (lowest to highest) awskms=AWS managed KMS; awscmk=Customer managed KMS; externalcmk=Customer managed externally sourced KMS; cloudhsm=Customer managed CloudHSM sourced KMS',
             regex: '^(awskms|awscmk|externalcmk|cloudhsm)$',
-            default: 'awscmk'
+            default: 'awskms'
         }
     },
+    realtime_triggers: ['kinesisvideo:CreateStream', 'kinesisvideo:DeleteStream'],
 
     run: function(cache, settings, callback) {
         var results = [];
@@ -57,16 +59,39 @@ module.exports = {
                 return rcb();
             }
 
+            var listAliases = helpers.addSource(cache, source,
+                ['kms', 'listAliases', region]);
+
+            if (!listAliases || listAliases.err || !listAliases.data) {
+                helpers.addResult(results, 3,
+                    'Unable to query for KMS aliases: ' + helpers.addError(listAliases),
+                    region);
+                return rcb();
+            }
+
+            var keyArn;
+            var kmsAliasArnMap = {};
+            listAliases.data.forEach(function(alias) {
+                keyArn = alias.AliasArn.replace(/:alias\/.*/, ':key/' + alias.TargetKeyId);
+                kmsAliasArnMap[alias.AliasName] = keyArn;
+            });
+
             for (let streamData of listStreams.data) {
                 if (!streamData.StreamARN) continue;
 
                 let resource = streamData.StreamARN;
 
                 if (streamData.KmsKeyId) {
-                    var kmsKeyId = streamData.KmsKeyId.split('/')[1] ? streamData.KmsKeyId.split('/')[1] : streamData.KmsKeyId;
+
+                    let aliasKey = streamData.KmsKeyId.includes('alias/') ? streamData.KmsKeyId.split(':').pop() : streamData.KmsKeyId;
+                    let kmsKeyArn = (aliasKey.startsWith('alias/'))
+                        ? (kmsAliasArnMap[aliasKey] ? kmsAliasArnMap[aliasKey] : streamData.KmsKeyId)
+                        : streamData.KmsKeyId;
+                    var kmsKeyId = kmsKeyArn.split('/')[1] ? kmsKeyArn.split('/')[1] : kmsKeyArn;
+
 
                     var describeKey = helpers.addSource(cache, source,
-                        ['kms', 'describeKey', region, kmsKeyId]);  
+                        ['kms', 'describeKey', region, kmsKeyId]);
 
                     if (!describeKey || describeKey.err || !describeKey.data || !describeKey.data.KeyMetadata) {
                         helpers.addResult(results, 3,

@@ -15,7 +15,7 @@ var authenticate = async function(GoogleConfig) {
         email: GoogleConfig.client_email,
         key: GoogleConfig.private_key,
         scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-    });   
+    });
     return client;
 };
 
@@ -78,7 +78,7 @@ var processCall = function(GoogleConfig, collection, settings, regions, call, se
 
 
 var run = function(GoogleConfig, collection, settings, service, callObj, callKey, region, regionCb, client, myEngine) {
-    
+
     if (settings.skip_regions &&
         settings.skip_regions.indexOf(region) > -1) return regionCb();
     var LocalGoogleConfig = JSON.parse(JSON.stringify(GoogleConfig));
@@ -95,13 +95,13 @@ var run = function(GoogleConfig, collection, settings, service, callObj, callKey
         params : {}
     };
 
-    var records;    
+    var records;
     if (myEngine) {
         if (!collection[service][myEngine][callKey][region]) {
             collection[service][myEngine][callKey][region] = {};
             collection[service][myEngine][callKey][region].data = [];
         }
-        
+
         if (callObj.reliesOnService) {
             if (!callObj.reliesOnService.length) {
                 return regionCb();
@@ -112,10 +112,10 @@ var run = function(GoogleConfig, collection, settings, service, callObj, callKey
 
                 if (callObj.reliesOnService[reliedService] &&
                     (!collection[callObj.reliesOnService[reliedService]] ||
-                    !collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]] ||
-                    !collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]][region] ||
-                    !collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]][region].data ||
-                    !collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]][region].data.length)) return regionCb();
+                        !collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]] ||
+                        !collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]][region] ||
+                        !collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]][region].data ||
+                        !collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]][region].data.length)) return regionCb();
 
                 records = collection[callObj.reliesOnService[reliedService]][myEngine][callObj.reliesOnCall[reliedService]][region].data;
                 if (callObj.subObj) records = records.filter(record => !!record[callObj.subObj]);
@@ -150,21 +150,44 @@ var run = function(GoogleConfig, collection, settings, service, callObj, callKey
             for (reliedService in callObj.reliesOnService) {
                 if (callObj.reliesOnService[reliedService] && !collection[callObj.reliesOnService[reliedService]]) {
                     return regionCb();
-                } 
-                
+                }
+
                 if (callObj.reliesOnService[reliedService] &&
                     (!collection[callObj.reliesOnService[reliedService]] ||
-                    !collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]] ||
-                    !collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]][region] ||
-                    !collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]][region].data ||
-                    !collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]][region].data.length)) return regionCb();
+                        !collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]] ||
+                        !collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]][region] ||
+                        !collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]][region].data ||
+                        !collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]][region].data.length)) return regionCb();
 
                 records = collection[callObj.reliesOnService[reliedService]][callObj.reliesOnCall[reliedService]][region].data;
+                if (callObj.filterObjKey && records.length === 1) records = records[0];
+
+                if (records && typeof records === 'object' && !Array.isArray(records) && callObj.filterObjKey) {
+                    let callObjData = [];
+                    Object.keys(records).map(key => {
+                        if (records[key] && records[key][callObj.filterObjKey]) {
+                            if (Array.isArray(records[key][callObj.filterObjKey])) {
+                                let recordsToPush = records[key][callObj.filterObjKey];
+                                recordsToPush = recordsToPush.map(obj => {
+                                    obj.location = key;
+                                    return obj;
+
+                                });
+                                callObjData.push(...recordsToPush);
+                            }
+                        }
+                    });
+                    records =  callObjData;
+                }
                 if (callObj.subObj) records = records.filter(record => !!record[callObj.subObj]);
                 async.eachLimit(records, callObj.maxLimit ? 35 : 10, function(record, recordCb) {
                     callObj.urlToCall = callObj.url;
                     for (var property in callObj.properties) {
-                        callObj.urlToCall = callObj.urlToCall.replace(`{${callObj.properties[property]}}`, !callObj.subObj ? record[callObj.properties[property]] :  record[callObj.subObj][callObj.properties[property]]);
+                        let data = !callObj.subObj ? record[callObj.properties[property]] :  record[callObj.subObj][callObj.properties[property]];
+                        if (callObj.encodeProperty){
+                            data = encodeURIComponent(data);
+                        }
+                        callObj.urlToCall = callObj.urlToCall.replace(`{${callObj.properties[property]}}`, data);
                     }
                     if (!callObj.maxLimit || (callObj.maxLimit && collectionItems.data && collectionItems.data.length < callObj.maxLimit)) {
                         execute(LocalGoogleConfig, collection, service, callObj, callKey, region, recordCb, client, options, myEngine, true, record);
@@ -283,6 +306,8 @@ var execute = async function(LocalGoogleConfig, collection, service, callObj, ca
             resultItems = setData(collectionItems, data.data[callObj.dataKey], postCall, parent, {'service': service, 'callKey': callKey, maxLimit: callObj.maxLimit});
         } else if (data.data.clusters && ['kubernetes', 'dataproc'].includes(service)) {
             resultItems = setData(collectionItems, data.data['clusters'], postCall, parent, {'service': service, 'callKey': callKey, maxLimit: callObj.maxLimit});
+        } else if (callObj.dataKey && data.data && data.data.length && callObj.isDataArray) {
+            resultItems = setData(collectionItems, data.data[0][callObj.dataKey], postCall, parent, {'service': service, 'callKey': callKey, maxLimit: callObj.maxLimit});
         } else if (callObj.dataFilterKey && data.data[callObj.dataFilterKey]) {
             resultItems = setData(collectionItems, data.data[callObj.dataFilterKey], postCall, parent, {'service': service, 'callKey': callKey, maxLimit: callObj.maxLimit});
         } else if (data.data[service]) {
@@ -304,7 +329,7 @@ var execute = async function(LocalGoogleConfig, collection, service, callObj, ca
             if (myEngine) collection[service][myEngine][callKey][region] = resultItems;
             else collection[service][callKey][region] = resultItems;
         }
-        if (data.data && data.data.nextPageToken && (!callObj.maxLimit
+        if (data.data && callObj.pagination && data.data.nextPageToken && (!callObj.maxLimit
             || (callObj.maxLimit && collectionItems.data && collectionItems.data.length < callObj.maxLimit))) {
             makeApiCall(client, url, executorCb, data.data.nextPageToken, { pagination: callObj.pagination, paginationKey: callObj.paginationKey, reqParams: callObj.reqParams });
         } else {
@@ -317,16 +342,18 @@ var execute = async function(LocalGoogleConfig, collection, service, callObj, ca
             }
         }
     };
-  
+
     if (callObj.url || callObj.urlToCall) {
         let url = callObj.urlToCall ? callObj.urlToCall : callObj.url;
+        if (region === 'global' && callObj.globalURL) {
+            url = callObj.globalURL;
+        }
         url = url.replace('{projectId}', LocalGoogleConfig.project);
         if (callObj.location && callObj.location == 'zone') {
             url = url.replace('{locationId}', callObj.params.zone);
         } else if (callObj.location && callObj.location == 'region') {
-            url = url.replace('{locationId}', callObj.params.region);
+            url = url.replace(/{locationId}/g, callObj.params.region);
         }
-
         makeApiCall(client, url, executorCb, null, {method: callObj.method, isPostCall, parentRecord, pagination: callObj.pagination, paginationKey: callObj.paginationKey, reqParams: callObj.reqParams, dataKey: callObj.dataKey, body: callObj.body});
     }
 };
@@ -393,7 +420,7 @@ function makeApiCall(client, originalUrl, callCb, nextToken, config) {
         });
     }, function(err, data){
         callCb(err, data);
-    });    
+    });
 }
 
 function setData(collection, dataToAdd, postCall, parent, serviceInfo) {

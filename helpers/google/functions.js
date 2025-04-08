@@ -206,6 +206,76 @@ function findOpenAllPorts(ngs, location, results, cache, source) {
     }
 }
 
+function findOpenAllPortsEgress(ngs, location, results, cache, source) {
+    let projects = shared.addSource(cache, source,
+        ['projects','get', 'global']);
+
+    if (!projects || projects.err || !projects.data || !projects.data.length) {
+        addResult(results, 3,
+            'Unable to query for projects: ' + shared.addError(projects), 'global', null, null, (projects) ? projects.err : null);
+        return;
+    }
+
+    var project = projects.data[0].name;
+    let protocols = {'tcp': '*', 'udp' : '*'};
+    for (let sgroups of ngs) {
+        let strings = [];
+        let resource = createResourceName('firewalls', sgroups.name, project, 'global');
+        if (sgroups.allowed && sgroups.allowed.length) {
+            let firewallRules = sgroups.allowed;
+            let destAddressPrefix = sgroups.destinationRanges;
+
+            if (!destAddressPrefix || !destAddressPrefix.length) continue;
+
+            for (let firewallRule of firewallRules) {
+                for (let protocol in protocols) {
+                    if (sgroups['direction'] && (sgroups['direction'] === 'EGRESS') &&
+                        firewallRule['IPProtocol'] && (firewallRule['IPProtocol'] === protocol) &&
+                        !sgroups['disabled'] &&
+                        destAddressPrefix &&
+                        (destAddressPrefix.includes('*') || destAddressPrefix.includes('') || destAddressPrefix.includes('0.0.0.0/0') || destAddressPrefix.includes('<nw>/0') || destAddressPrefix.includes('/0') || destAddressPrefix.includes('internet'))) {
+                        if (firewallRule['ports']) {
+                            firewallRule['ports'].forEach((portRange) => {
+                                if (portRange.includes("-")) {
+                                    portRange = portRange.split("-");
+                                    let startPort = portRange[0];
+                                    let endPort = portRange[1];
+                                    if (parseInt(startPort) === 0 && parseInt(endPort) === 65535) {
+                                        var string = 'all ports open to the public';
+                                        if (strings.indexOf(string) === -1) strings.push(string);
+                                    }
+                                } else if (portRange === 'all') {
+                                    var string = 'all ports open to the public';
+                                    if (strings.indexOf(string) === -1) strings.push(string);
+                                }
+                            });
+                        }
+                    } else if (sgroups['direction'] && (sgroups['direction'] === 'EGRESS') &&
+                        firewallRule['IPProtocol'] && (firewallRule['IPProtocol'] === 'all') &&
+                        !sgroups['disabled'] &&
+                        destAddressPrefix &&
+                        (destAddressPrefix.includes('*') || destAddressPrefix.includes('') || destAddressPrefix.includes('0.0.0.0/0') || destAddressPrefix.includes('<nw>/0') || destAddressPrefix.includes('/0') || destAddressPrefix.includes('internet'))) {
+                        var string = 'all ports open to the public';
+                        if (strings.indexOf(string) === -1) strings.push(string);
+                    }
+                }
+            }
+        }
+        if (strings.length) {
+            shared.addResult(results, 2,
+                'Firewall Rule:(' + sgroups.name +
+                ') has ' + strings.join(' and '), location,
+                resource);
+        }
+        else {
+            shared.addResult(results, 0,
+                'Firewall Rule:(' + sgroups.name +
+                ') does not have all ports open to the public', location,
+                resource);
+        }
+    }
+}
+
 function hasBuckets(buckets){
     if(buckets.length &&
         Object.keys(buckets[0]).length>1) {
@@ -295,7 +365,7 @@ function checkOrgPolicy(orgPolicies, constraintName, constraintType, shouldBeEna
         } else {
             isEnabled = ifNotFound;
         }
-    } 
+    }
     let successMessage = `"${displayName}" constraint is enforced at the organization level.`;
     let failureMessage = `"${displayName}" constraint is not enforced at the organization level.`;
     let status, message;
@@ -332,6 +402,193 @@ function checkIAMRole(iamPolicy, roles, region, results, project, notFoundMessag
     }
 }
 
+function checkFirewallRules(firewallRules) {
+    firewallRules.sort((a, b) => (a.priority || 1000) - (b.priority || 1000));
+
+    for (const firewallRule of firewallRules) {
+        if (firewallRule.direction !== 'INGRESS' || firewallRule.disabled) {
+            continue;
+        }
+
+        const networkName = firewallRule.network ? firewallRule.network.split('/').pop() : '';
+
+        let allSources = firewallRule.sourceRanges? firewallRule.sourceRanges.some(sourceAddressPrefix =>
+            sourceAddressPrefix === '*' ||
+            sourceAddressPrefix === '0.0.0.0/0' ||
+            sourceAddressPrefix === '::/0' ||
+            sourceAddressPrefix.includes('/0') ||
+            sourceAddressPrefix.toLowerCase() === 'internet' ||
+            sourceAddressPrefix.includes('<nw>/0')
+        ): false;
+
+        var allowed = firewallRule.allowed? firewallRule.allowed.some(allow => !!allow.IPProtocol): false;
+        var denied = firewallRule.denied? firewallRule.denied.some(deny => deny.IPProtocol === 'all'): false;
+        if (allSources && allowed) {
+            return {exposed: true, networkName: `vpc ${networkName}`};
+        }
+
+        if (allSources && denied) {
+            return {exposed: false};
+        }
+    }
+
+    return {exposed: true};
+
+
+}
+
+function getForwardingRules(cache, source, region, resource) {
+    let rules = [];
+
+    let forwardingRules = getAllDataForService(cache, source, 'forwardingRules', 'list', region);
+    let backendServices = getAllDataForService(cache, source, 'backendServices', 'list', region);
+    let targetHttpProxies = getAllDataForService(cache, source, 'targetHttpProxies', 'list', region);
+    let targetHttpsProxies = getAllDataForService(cache, source, 'targetHttpsProxies', 'list', region);
+    let urlMaps = getAllDataForService(cache, source, 'urlMaps', 'list', region);
+
+    if (!forwardingRules || !forwardingRules.length || !backendServices || !backendServices.length) {
+        return [];
+    }
+
+    if (resource.httpsTrigger && resource.httpsTrigger.url) {
+        backendServices = backendServices.filter(service => {
+            if (service.backends && service.backends.length) {
+                return service.backends.some(backend => backend.target && backend.target.includes(resource.httpsTrigger.url));
+            }
+        });
+    } else {
+        backendServices = backendServices.filter(service => {
+            if (service.backends && service.backends.length) {
+                return service.backends.some(backend => {
+                    let group = backend.group.replace(/^.*?(\/projects\/.*)$/, '$1');
+                    return resource.selfLink.includes(group);
+                });
+            }
+        });
+    }
+
+    if (backendServices && backendServices.length) {
+        forwardingRules.forEach(rule => {
+            let rulePath = `FR ${rule.name}`;
+            let targetProxyLink = '';
+            let urlMapLink = '';
+            let backendServiceLink = '';
+
+            if (rule.target && (rule.target.includes('targetHttpProxies') || rule.target.includes('targetHttpsProxies'))) {
+                let target = rule.target.replace(/^.*?(\/projects\/.*)$/, '$1');
+                let targetProxy = rule.target.includes('targetHttpProxies')
+                    ? targetHttpProxies.find(proxy => proxy.selfLink.includes(target))
+                    : targetHttpsProxies.find(proxy => proxy.selfLink.includes(target));
+
+                if (targetProxy) {
+                    rulePath += ` > TP ${targetProxy.name}`;
+                    targetProxyLink = targetProxy.selfLink;
+
+                    if (targetProxy.urlMap) {
+                        let urlMap = urlMaps.find(map => map.selfLink.includes(targetProxy.urlMap.replace(/^.*?(\/projects\/.*)$/, '$1')));
+                        if (urlMap && urlMap.defaultService) {
+                            rulePath += ` > UM ${urlMap.name}`;
+                            urlMapLink = urlMap.selfLink;
+
+                            let serviceName = urlMap.defaultService.replace(/^.*?(\/projects\/.*)$/, '$1');
+                            let matchedBackendService = backendServices.find(service => service.selfLink.includes(serviceName));
+
+                            if (matchedBackendService) {
+                                rulePath += ` > BS ${matchedBackendService.name}`;
+                                backendServiceLink = matchedBackendService.selfLink;
+                            }
+                        }
+                    } else {
+                        let matchedBackendService = backendServices.find(service => targetProxy.selfLink.includes(service.selfLink.replace(/^.*?(\/projects\/.*)$/, '$1')));
+
+                        if (matchedBackendService) {
+                            rulePath += ` > BS ${matchedBackendService.name}`;
+                            backendServiceLink = matchedBackendService.selfLink;
+                        }
+                    }
+                }
+            } else if (rule.backendService) {
+                let serviceName = rule.backendService.replace(/^.*?(\/projects\/.*)$/, '$1');
+                let matchedBackendService = backendServices.find(service => service.selfLink.includes(serviceName));
+
+                if (matchedBackendService) {
+                    rulePath += ` > BS ${matchedBackendService.name}`;
+                    backendServiceLink = matchedBackendService.selfLink;
+                }
+            }
+
+            if (backendServiceLink) {
+                rules.push({ ...rule, rulePath });
+            }
+        });
+    }
+    return rules;
+}
+
+
+function getAllDataForService(cache, source, service, call, region) {
+    let allData = [];
+
+    let globalData = shared.addSource(cache, source, [service, call, 'global']);
+    let regionalData = shared.addSource(cache, source, [service, call, region]);
+
+
+    if (globalData && !globalData.err && globalData.data && globalData.data.length) {
+        allData = allData.concat(globalData.data);
+    }
+
+    if (regionalData && !regionalData.err && regionalData.data && regionalData.data.length) {
+        allData = allData.concat(regionalData.data);
+    }
+    return allData;
+}
+
+function checkClusterExposure(cluster) {
+    const privateClusterConfig = cluster.privateClusterConfig || {};
+    const masterAuthorizedNetworksConfig = cluster.masterAuthorizedNetworksConfig || {};
+
+    const cidrBlocks = masterAuthorizedNetworksConfig.cidrBlocks || [];
+
+    const publicCidrPatterns = ['0.0.0.0/0', '::/0', '*', '::0'];
+
+    const hasPublicCIDR = cidrBlocks.some(block =>  publicCidrPatterns.includes(block));
+
+    return (
+        (!privateClusterConfig.enablePrivateEndpoint && privateClusterConfig.publicEndpoint) ||    // Public endpoint with no private endpoint
+        masterAuthorizedNetworksConfig.gcpPublicCidrsAccessEnabled ||                   // Google Cloud public IPs are allowed
+        hasPublicCIDR                                    // If there is a public CIDR like 0.0.0.0/0, ::/0, or *
+    );
+}
+
+function checkNetworkExposure(cache, source, networks, firewallRules, region, results, forwardingRules)  {
+    let exposedPath = '';
+
+    if (firewallRules && firewallRules.length) {
+        // Scenario 1: check if any firewall rule allows all inbound traffic
+        let isExposed = checkFirewallRules(firewallRules);
+        if (isExposed.exposed) {
+            if (isExposed.networkName) {
+                return isExposed.networkName;
+            }
+        } else {
+            return '';
+        }
+    }
+
+    // load balancing flow
+    if (forwardingRules && forwardingRules.length) {
+        for (let rule of forwardingRules) {
+            let ipAddress = rule.IPAddress;
+            if ((rule.loadBalancingScheme === 'EXTERNAL' || rule.loadBalancingScheme === 'EXTERNAL_MANAGED') &&
+                (ipAddress && !ipAddress.startsWith('10.') && !ipAddress.startsWith('192.168.') && !ipAddress.startsWith('172.'))) {
+                exposedPath =  rule.rulePath || rule.name;
+                break;
+
+            }
+        }
+    }
+    return exposedPath
+}
 module.exports = {
     addResult: addResult,
     findOpenPorts: findOpenPorts,
@@ -342,5 +599,10 @@ module.exports = {
     listToObj: listToObj,
     createResourceName: createResourceName,
     checkOrgPolicy: checkOrgPolicy,
-    checkIAMRole: checkIAMRole
+    checkIAMRole: checkIAMRole,
+    findOpenAllPortsEgress: findOpenAllPortsEgress,
+    checkNetworkExposure: checkNetworkExposure,
+    getForwardingRules: getForwardingRules,
+    checkClusterExposure: checkClusterExposure,
+    checkFirewallRules: checkFirewallRules
 };

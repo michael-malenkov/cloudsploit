@@ -5,6 +5,7 @@ module.exports = {
     title: 'CodeStar Valid Repository Providers',
     category: 'CodeStar',
     domain: 'Application Integration',
+    severity: 'Medium',
     description: 'Ensure that CodeStar projects are not using undesired repository providers.',
     more_info: 'CodeStar should use only allowed repository providers in order to follow your organizations\'s security and compliance requirements.',
     link: 'https://docs.aws.amazon.com/codestar/latest/userguide/getting-started.html#getting-started-create',
@@ -18,6 +19,7 @@ module.exports = {
             default: ''
         }
     },
+    realtime_triggers: ['codestar:CreateProject','codestar:DeleteProject'],
 
     run: function(cache, settings, callback) {
         var results = [];
@@ -58,7 +60,6 @@ module.exports = {
 
                 let repoProvider = (describeProject.data.projectTemplateId.split('/').length > 1) ?
                     describeProject.data.projectTemplateId.split('/')[1] : '';
-                
                 if (config.codestar_disallowed_repo_providers.includes(repoProvider)) {
                     helpers.addResult(results, 2,
                         `CodeStar project is using ${repoProvider} as repository provider which should not be used`,

@@ -1,16 +1,18 @@
 var async = require('async');
 
-var helpers = require('../../../helpers/azure/');
+var helpers = require('../../../helpers/azure');
 
 module.exports = {
-    title: 'Disk Volumes BYOK Encryption Enabled',
+    title: 'Attached Disk Volumes BYOK Encryption Enabled',
     category: 'Virtual Machines',
     domain: 'Compute',
-    description: 'Ensures that Azure virtual machine disks have BYOK (Customer-Managed Key) encryption enabled.',
+    severity: 'High',
+    description: 'Ensures that attached Azure virtual machine disks have BYOK (Customer-Managed Key) encryption enabled.',
     more_info: 'Encrypting virtual machine disk volumes helps protect and safeguard your data to meet organizational security and compliance commitments.',
     recommended_action: 'Ensure that virtual machine disks are created using BYOK encryption',
-    link: 'https://docs.microsoft.com/en-us/azure/virtual-machines/windows/disk-encryption-key-vault',
+    link: 'https://learn.microsoft.com/en-us/azure/virtual-machines/windows/disk-encryption-key-vault',
     apis: ['disks:list'],
+    realtime_triggers: ['microsoftcompute:disks:write', 'microsoftcompute:disks:delete'],
 
     run: function(cache, settings, callback) {
         var results = [];
@@ -33,13 +35,15 @@ module.exports = {
             }
 
             async.each(disks.data, function(disk, scb) {
-                if (disk.encryption && disk.encryption.type &&
-                    (disk.encryption.type === 'EncryptionAtRestWithCustomerKey' ||
-                    disk.encryption.type === 'EncryptionAtRestWithPlatformAndCustomerKeys')) {
-                    helpers.addResult(results, 0, 'Disk volume has BYOK encryption enabled', location, disk.id);
-                } else {
-                    helpers.addResult(results, 2, 'Disk volume has BYOK encryption disabled', location, disk.id);
-                }
+                if (disk.diskState && disk.diskState.toLowerCase() === 'attached') {
+                    if (disk.encryption && disk.encryption.type &&
+                        (disk.encryption.type === 'EncryptionAtRestWithCustomerKey' ||
+                        disk.encryption.type === 'EncryptionAtRestWithPlatformAndCustomerKeys')) {
+                        helpers.addResult(results, 0, 'Disk volume has BYOK encryption enabled', location, disk.id);
+                    } else {
+                        helpers.addResult(results, 2, 'Disk volume has BYOK encryption disabled', location, disk.id);
+                    }
+                }        
                 scb();
             }, function() {
                 rcb();

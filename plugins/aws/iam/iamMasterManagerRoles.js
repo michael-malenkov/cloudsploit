@@ -110,6 +110,7 @@ module.exports = {
     title: 'IAM Master and IAM Manager Roles',
     category: 'IAM',
     domain: 'Identity and Access Management',
+    severity: 'High',
     description: 'Ensure IAM Master and IAM Manager roles are active within your AWS account.',
     more_info: 'IAM roles should be split into IAM Master and IAM Manager roles to work in two-person rule manner for best prectices.',
     link: 'https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html',
@@ -129,6 +130,7 @@ module.exports = {
             default: ''
         }
     },
+    realtime_triggers: ['iam:CreateRole','iam:DeleteRole'],
 
     run: function(cache, settings, callback) {
         var config = {
@@ -200,7 +202,7 @@ module.exports = {
             var getRolePolicy = helpers.addSource(cache, source,
                 ['iam', 'getRolePolicy', region, role.RoleName]);
 
-            if (listRolePolicies.err || !listRolePolicies.data || !listRolePolicies.data.PolicyNames) {
+            if (!listRolePolicies || listRolePolicies.err || !listRolePolicies.data || !listRolePolicies.data.PolicyNames) {
                 helpers.addResult(results, 3,
                     'Unable to query for IAM role policy for role: ' + role.RoleName + ': ' + helpers.addError(listRolePolicies), 'global', role.Arn);
                 return cb();

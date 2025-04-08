@@ -44,7 +44,7 @@ function parseCollection(path, obj) {
     }
 }
 
-var collect = function(AzureConfig, settings, callback) {
+let collect = function(AzureConfig, settings, callback, fargateFlag) {
     // Used to gather info only
     if (settings.gather) {
         return callback(null, calls, postcalls, tertiarycalls, specialcalls);
@@ -53,6 +53,7 @@ var collect = function(AzureConfig, settings, callback) {
     var helpers = require(__dirname + '/../../helpers/azure/auth.js');
 
     let services = [];
+    let skip_locations= settings.skip_regions || [];
 
     // Login using the Azure config
     helpers.login(AzureConfig, function(loginErr, loginData) {
@@ -64,9 +65,10 @@ var collect = function(AzureConfig, settings, callback) {
             helpers.call({
                 url: localUrl,
                 post: obj.post,
-                token: obj.graph ? loginData.graphToken : (obj.vault ? loginData.vaultToken : loginData.token)
-            }, function(err, data) {
-                if (err) return cb(err);
+                token: obj.graph ? loginData.graphToken : (obj.vault ? loginData.vaultToken : loginData.token),
+                govcloud : AzureConfig.Govcloud
+            }, function(err, data, response) {
+                if (err) return cb(err, null, response);
 
                 // If a new nextLink is provided, this will be updated.  There shouldn't
                 // be a need to hold on to the previous value
@@ -83,7 +85,8 @@ var collect = function(AzureConfig, settings, callback) {
                     return cb(null, localData);
                 }
 
-                if (data && ((obj.paginate && data[obj.paginate]) || data['nextLink'])) {
+                let resData = localData || data;
+                if (data && ((obj.paginate && data[obj.paginate]) || data['nextLink']) && (!obj.limit || (obj.limit && resData && resData.value && resData.value.length < obj.limit))) {
                     obj.nextUrl = data['nextLink'] || data[obj.paginate];
                     processCall(obj, cb, localData || data);
                 } else {
@@ -92,14 +95,52 @@ var collect = function(AzureConfig, settings, callback) {
             });
         };
 
-        var processCall = function(obj, cb, localData) {
-            var localUrl = obj.nextUrl || obj.url.replace(/\{subscriptionId\}/g, AzureConfig.SubscriptionID);
-            if (obj.rateLimit) {
-                setTimeout(function() {
-                    makeCall(localUrl, obj, cb, localData);
-                }, obj.rateLimit);
+        let processCall = function(obj, cb, localData) {
+            if (fargateFlag) {
+                const maxApiRetryAttempts = 15;
+                let initialResponse = null;
+                async.retry({
+                    times: maxApiRetryAttempts,
+                    interval: function() {
+                        let retryAfter = initialResponse && initialResponse.headers['retry-after'] ? parseInt(initialResponse.headers['retry-after']) * 1000 : 5000;
+                        let localUrl = obj.nextUrl || obj.url.replace(/\{subscriptionId\}/g, AzureConfig.SubscriptionID);
+                        console.log(`Retrying in  ${retryAfter / 1000} seconds for api call : ${localUrl}`);
+                        return retryAfter;
+                    },
+                    errorFilter: function(err) {
+                        return err.includes('TooManyRequests');
+                    }
+                }, function(retryCallback) {
+                    let localUrl = obj.nextUrl || obj.url.replace(/\{subscriptionId\}/g, AzureConfig.SubscriptionID);
+                    // Temporary fix to add additional buffer of 6 seconds before each call
+                    var rateLimit = obj.rateLimit && obj.rateLimit == 3000? 6000: obj.rateLimit;
+                    if (rateLimit) {
+                        setTimeout(function() {
+                            console.log(`Fargate collector rate limited: url: ${localUrl}`);
+                            makeCall(localUrl, obj, function(err, data, response) {
+                                initialResponse = response;
+                                return retryCallback(err, data, response);
+                            }, localData);
+                        }, rateLimit);
+                    } else {
+                        makeCall(localUrl, obj, function(err, data, response) {
+                            initialResponse = response;
+                            return retryCallback(err, data, response);
+                        }, localData);
+                    }
+                }, function(err, data, response) {
+                    cb(err, data, response);
+                });
             } else {
-                makeCall(localUrl, obj, cb, localData);
+                let localUrl = obj.nextUrl || obj.url.replace(/\{subscriptionId\}/g, AzureConfig.SubscriptionID);
+                if (obj.rateLimit) {
+                    setTimeout(function() {
+                        console.log(`url: ${localUrl}`);
+                        makeCall(localUrl, obj, cb, localData);
+                    }, obj.rateLimit);
+                } else {
+                    makeCall(localUrl, obj, cb, localData);
+                }
             }
         };
 
@@ -110,10 +151,12 @@ var collect = function(AzureConfig, settings, callback) {
                 return accumulator;
             }, {});
 
-            settings.previousCollection = Object.keys(settings.previousCollection).reduce((accumulator, key) => {
-                accumulator[key.toLowerCase()] = settings.previousCollection[key];
-                return accumulator;
-            }, {});
+            if (settings.previousCollection) {
+                settings.previousCollection = Object.keys(settings.previousCollection).reduce((accumulator, key) => {
+                    accumulator[key.toLowerCase()] = settings.previousCollection[key];
+                    return accumulator;
+                }, {});
+            }
 
             if (collect[service.toLowerCase()] &&
                 Object.keys(collect[service.toLowerCase()]) &&
@@ -132,13 +175,14 @@ var collect = function(AzureConfig, settings, callback) {
                 cback();
             }
         };
-        
+
         async.series([
             // Calls - process the simple calls
             function(cb) {
                 function processTopCall(collectionObj, service, subCallObj, subCallCb) {
                     processCall(subCallObj, function(processCallErr, processCallData) {
-                        helpers.addLocations(subCallObj, service, collectionObj, processCallErr, processCallData);
+                        if (AzureConfig.Govcloud) helpers.addGovLocations(subCallObj, service, collectionObj, processCallErr, processCallData , skip_locations);
+                        else helpers.addLocations(subCallObj, service, collectionObj, processCallErr, processCallData , skip_locations);
                         subCallCb();
                     });
                 }
@@ -202,11 +246,15 @@ var collect = function(AzureConfig, settings, callback) {
                                         token: subCallObj.token,
                                         graph: subCallObj.graph,
                                         vault: subCallObj.vault,
-                                        rateLimit: subCallObj.rateLimit
+                                        rateLimit: subCallObj.rateLimit,
+                                        limit: subCallObj.limit
                                     };
                                     // Check and replace properties
                                     if (subCallObj.properties && subCallObj.properties.length) {
                                         subCallObj.properties.forEach(function(propToReplace) {
+                                            if (propToReplace.includes('.')) {
+                                                regionData[propToReplace] = parseCollection(propToReplace, regionData);
+                                            }
                                             if (regionData[propToReplace]) {
                                                 var re = new RegExp(`{${propToReplace}}`, 'g');
                                                 localReq.url = subCallObj.url.replace(re, regionData[propToReplace]);
@@ -303,7 +351,8 @@ var collect = function(AzureConfig, settings, callback) {
                                         token: subCallObj.token,
                                         graph: subCallObj.graph,
                                         vault: subCallObj.vault,
-                                        rateLimit: subCallObj.rateLimit
+                                        rateLimit: subCallObj.rateLimit,
+                                        limit: subCallObj.limit
                                     };
                                     // Check and replace properties
                                     if (subCallObj.properties && subCallObj.properties.length) {
@@ -483,3 +532,4 @@ var collect = function(AzureConfig, settings, callback) {
 };
 
 module.exports = collect;
+

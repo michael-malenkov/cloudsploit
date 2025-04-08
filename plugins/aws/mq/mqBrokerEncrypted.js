@@ -5,6 +5,7 @@ module.exports = {
     title: 'MQ Broker Encrypted',
     category: 'MQ',
     domain: 'Application Integration',
+    severity: 'High',
     description: 'Ensure that Amazon MQ brokers have data encrypted at-rest feature enabled.',
     more_info: 'Amazon MQ encryption at rest provides enhanced security by encrypting your data using encryption keys stored in the AWS Key Management Service (KMS).',
     recommended_action: 'Enabled data at-rest encryption feature for MQ brokers',
@@ -15,9 +16,10 @@ module.exports = {
             name: 'MQ Broker Target Encryption Level',
             description: 'In order (lowest to highest) sse=AWS-owned CMK awskms=AWS-managed KMS; awscmk=Customer managed KMS; externalcmk=Customer managed externally sourced KMS; cloudhsm=Customer managed CloudHSM sourced KMS',
             regex: '^(sse|awskms|awscmk|externalcmk|cloudhsm)$',
-            default: 'awscmk'
+            default: 'awskms'
         }
     },
+    realtime_triggers: ['mq:CreateBrocker', 'mq:DeleteBrocker'],
 
     run: function(cache, settings, callback) {
         var results = [];
